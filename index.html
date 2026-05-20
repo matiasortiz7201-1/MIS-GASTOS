@@ -440,7 +440,7 @@ input,select{cursor:text}
   </div>
   <div class="frow">
     <div class="ff">
-      <label>Monto (MXN $)</label>
+      <label>Monto</label>
       <input class="fi" id="fAmt" type="number" placeholder="0.00" min="0" step="0.01" inputmode="decimal">
     </div>
     <div class="ff">
@@ -461,6 +461,13 @@ input,select{cursor:text}
     <div class="type-row" id="typeRow">
       <div class="topt" onclick="selType('variable')">🔄 Variable</div>
       <div class="topt" onclick="selType('fixed')">📌 Fijo</div>
+    </div>
+  </div>
+  <div class="ff">
+    <label>Moneda</label>
+    <div class="type-row" id="currRow">
+      <div class="topt sel-fixed" onclick="pickCurr('usd')">🇺🇸 USD</div>
+      <div class="topt" onclick="pickCurr('pen')">🇵🇪 PEN (Soles)</div>
     </div>
   </div>
   <div class="ff">
@@ -554,11 +561,13 @@ let S = {
   apiKey: '',
   aiChat: [],
   aiInsights: [],
+  monthlyIncome: 2800,
+  exchangeRate: 3.7,
 };
 
 const today = new Date();
 let viewY = today.getFullYear();
-let viewM = today.getMonth();
+let viewM = today.getMonth(); // Current month
 let curView = 'dashboard';
 let activeFilter = 'all';
 let selCat = 'comida';
@@ -570,6 +579,7 @@ let aiOpen = false;
 let subModalOpen = false;
 let selSubEmoji = '📺';
 let selFreqVal = 'monthly';
+let selCurr = 'usd'; // 'usd' | 'pen'
 let aiLoading = false;
 let registeredSubs = {};
 
@@ -597,10 +607,18 @@ const mk = (y,m) => `${y}-${String(m+1).padStart(2,'0')}`;
 function fmt(n) {
   if (n >= 10000) return '$' + (n/1000).toFixed(0) + 'k';
   if (n >= 1000)  return '$' + (n/1000).toFixed(1).replace(/\.0$/,'') + 'k';
-  return '$' + Math.round(n);
+  return '$' + n.toFixed(0);
 }
 function fmtF(n) {
-  return new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',minimumFractionDigits:0,maximumFractionDigits:0}).format(n);
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function toUSD(amount, currency) {
+  if (currency === 'pen') return amount / (S.exchangeRate || 3.7);
+  return amount;
+}
+function fmtOrig(amount, currency) {
+  if (currency === 'pen') return 'S/ ' + amount.toFixed(2);
+  return '$' + amount.toFixed(2);
 }
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function toast(msg) {
@@ -610,6 +628,9 @@ function toast(msg) {
 function getMonthExpenses() {
   const key = mk(viewY, viewM);
   return S.expenses.filter(e => e.date.startsWith(key));
+}
+function getMonthTotal() {
+  return getMonthExpenses().reduce((s,e) => s + toUSD(e.amount, e.currency||'usd'), 0);
 }
 function totalBudget() { return Object.values(S.budgets).reduce((s,v) => s+(v||0), 0); }
 function monthlySubTotal() {
@@ -662,16 +683,19 @@ function renderMonthLabel() {
 // ══════════════════════════════════════════
 function renderDashboard() {
   const me = getMonthExpenses();
-  const total = me.reduce((s,e) => s+e.amount, 0);
+  const total = me.reduce((s,e) => s + toUSD(e.amount, e.currency||'usd'), 0);
   const tb = totalBudget();
-  const pct = tb > 0 ? Math.min((total/tb)*100, 100) : 0;
-  const fixedTotal = me.filter(e=>e.type==='fixed').reduce((s,e)=>s+e.amount, 0);
-  const varTotal   = me.filter(e=>e.type==='variable').reduce((s,e)=>s+e.amount, 0);
+  const income = S.monthlyIncome || 0;
+  const pct = tb > 0 ? Math.min((total/tb)*100, 100) : income > 0 ? Math.min((total/income)*100,100) : 0;
+  const fixedTotal = me.filter(e=>e.type==='fixed').reduce((s,e)=>s+toUSD(e.amount,e.currency||'usd'), 0);
+  const varTotal   = me.filter(e=>e.type==='variable').reduce((s,e)=>s+toUSD(e.amount,e.currency||'usd'), 0);
   const dLeft = daysLeftInMonth();
   const avgDay = isCurrentMonth() && today.getDate() > 0 ? total/today.getDate() : 0;
   const projected = isCurrentMonth() ? total + (avgDay * dLeft) : total;
+  const remaining = income > 0 ? income - total : null;
 
   // Hero color
+  const refAmt = tb > 0 ? tb : income;
   const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
   const heroSubClass = pct > 90 ? 'danger' : pct > 70 ? 'warn' : 'ok';
 
@@ -680,29 +704,47 @@ function renderDashboard() {
     const rem = tb - total;
     if (rem < 0) heroSubText = `Excediste tu presupuesto por ${fmtF(-rem)}`;
     else heroSubText = `${fmtF(rem)} disponibles · ${dLeft} días restantes`;
+  } else if (income > 0) {
+    const rem = income - total;
+    heroSubText = rem >= 0 ? `${fmtF(rem)} de ingreso disponible · ${dLeft} días` : `Excediste tu ingreso por ${fmtF(-rem)}`;
   } else if (me.length > 0) {
-    heroSubText = `${me.length} gasto${me.length!==1?'s':''} · Promedio $${Math.round(avgDay)}/día`;
+    heroSubText = `${me.length} gasto${me.length!==1?'s':''} · Promedio $${avgDay.toFixed(0)}/día`;
   } else {
     heroSubText = 'Sin gastos este mes';
   }
 
   // Savings goal
   let sgHtml = '';
-  if (S.savingsGoal > 0) {
+  if (income > 0) {
+    const spent = total;
+    const netSaving = income - spent;
+    const goalPct = S.savingsGoal > 0 ? Math.min((netSaving/S.savingsGoal)*100,100) : null;
+    sgHtml = `
+    <div class="card">
+      <div class="card-title">💵 Ingresos vs Gastos <span>${fmtF(income)} USD/mes</span></div>
+      <div class="sg-row">
+        <div>
+          <div class="sg-amt" style="color:${netSaving>=0?'var(--green)':'var(--red)'}">${fmtF(Math.abs(netSaving))}</div>
+          <div class="sg-sub">${netSaving>=0?'disponible este mes':'déficit este mes'}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:16px;color:var(--text2)">${fmtF(spent)}</div>
+          <div class="sg-sub">gastado (${income>0?Math.round(spent/income*100):0}% del ingreso)</div>
+        </div>
+      </div>
+      <div style="height:8px"></div>
+      <div class="sg-bar"><div class="sg-fill" style="width:${Math.min(spent/income*100,100)}%;background:${spent/income>0.9?'var(--red)':spent/income>0.7?'var(--yellow)':'var(--green)'}"></div></div>
+      ${S.savingsGoal>0?`<div style="margin-top:10px;font-size:10px;color:var(--muted)">Meta de ahorro: ${fmtF(S.savingsGoal)} → ${goalPct>=100?'<span style="color:var(--green)">¡Alcanzada! 🎉</span>':`<span style="color:var(--accent)">${Math.round(goalPct)}% (faltan ${fmtF(S.savingsGoal-netSaving)})</span>`}</div>`:''}
+    </div>`;
+  } else if (S.savingsGoal > 0) {
     const saved = tb > 0 ? Math.max(0, tb - total) : 0;
     const sgPct = Math.min((saved/S.savingsGoal)*100, 100);
-    sgHtml = `
+    sgHtml += `
     <div class="card">
       <div class="card-title">🎯 Meta de Ahorro <span>${fmtF(S.savingsGoal)}/mes</span></div>
       <div class="sg-row">
-        <div>
-          <div class="sg-amt" style="color:${sgPct>=100?'var(--green)':'var(--text)'}">${fmtF(saved)}</div>
-          <div class="sg-sub">ahorrado estimado</div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:16px;color:${sgPct>=100?'var(--green)':'var(--accent)'}">${Math.round(sgPct)}%</div>
-          <div class="sg-sub">${sgPct>=100?'¡Meta alcanzada! 🎉':'faltan ' + fmtF(S.savingsGoal - saved)}</div>
-        </div>
+        <div><div class="sg-amt" style="color:${sgPct>=100?'var(--green)':'var(--text)'}">${fmtF(saved)}</div><div class="sg-sub">ahorrado estimado</div></div>
+        <div style="text-align:right"><div style="font-family:'Syne',sans-serif;font-weight:700;font-size:16px;color:${sgPct>=100?'var(--green)':'var(--accent)'}">${Math.round(sgPct)}%</div><div class="sg-sub">${sgPct>=100?'¡Meta alcanzada! 🎉':'faltan ' + fmtF(S.savingsGoal - saved)}</div></div>
       </div>
       <div style="height:8px"></div>
       <div class="sg-bar"><div class="sg-fill" style="width:${sgPct}%"></div></div>
@@ -797,9 +839,9 @@ function renderDashboard() {
       <div class="hero-lbl">Gasto Total — ${MONTHS[viewM]}</div>
       <div class="hero-amt">${fmtF(total)}</div>
       <div class="hero-sub ${heroSubClass}">${heroSubText}</div>
-      ${tb > 0 ? `
+      ${(tb > 0 || income > 0) ? `
       <div class="budget-bar-row">
-        <span>Presupuesto: ${fmtF(tb)}</span>
+        <span>${tb>0?'Presupuesto: '+fmtF(tb):'Ingreso: '+fmtF(income)} USD</span>
         <span>${Math.round(pct)}%</span>
       </div>
       <div class="budget-bar"><div class="budget-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>
@@ -826,42 +868,39 @@ function renderDashboard() {
 
 function buildAlerts(me, total, tb, pct, avgDay, dLeft, projected) {
   const alerts = [];
+  const income = S.monthlyIncome || 0;
+
+  // Income alert
+  if (income > 0 && total > income * 0.9) {
+    alerts.push({type:'danger', icon:'🚨', title:'Casi sin ingreso disponible', text:`Gastaste ${fmtF(total)} de ${fmtF(income)} USD (${Math.round(total/income*100)}%). Solo te quedan ${fmtF(income-total)}.`});
+  }
 
   // Per-category budget alerts
   CATS.forEach(cat => {
     const limit = S.budgets[cat.id];
     if (!limit) return;
-    const spent = me.filter(e=>e.category===cat.id).reduce((s,e)=>s+e.amount, 0);
+    const spent = me.filter(e=>e.category===cat.id).reduce((s,e)=>s+toUSD(e.amount,e.currency||'usd'), 0);
     const catPct = (spent/limit)*100;
     if (catPct >= 100) {
-      alerts.push({type:'danger', icon:'🚨', title:`${cat.emoji} ${cat.label} — Límite excedido`, text:`Gastaste ${fmtF(spent)} de ${fmtF(limit)} (${Math.round(catPct)}%). Excediste por ${fmtF(spent-limit)}.`});
+      alerts.push({type:'danger', icon:'🚨', title:`${cat.emoji} ${cat.label} — Límite excedido`, text:`Gastaste ${fmtF(spent)} de ${fmtF(limit)} USD (${Math.round(catPct)}%). Excediste por ${fmtF(spent-limit)}.`});
     } else if (catPct >= 80) {
-      alerts.push({type:'warn', icon:'⚠️', title:`${cat.emoji} ${cat.label} — Casi al límite`, text:`Llevas ${Math.round(catPct)}% (${fmtF(spent)} de ${fmtF(limit)}). Solo te quedan ${fmtF(limit-spent)}.`});
+      alerts.push({type:'warn', icon:'⚠️', title:`${cat.emoji} ${cat.label} — Casi al límite`, text:`Llevas ${Math.round(catPct)}% (${fmtF(spent)} de ${fmtF(limit)} USD). Te quedan ${fmtF(limit-spent)}.`});
     }
   });
 
   // Projection alert
-  if (tb > 0 && projected > tb * 1.1) {
-    alerts.push({type:'warn', icon:'📈', title:'Proyección excede presupuesto', text:`A este ritmo, gastarás ${fmtF(projected)} este mes vs tu presupuesto de ${fmtF(tb)}.`});
+  const ref = tb > 0 ? tb : income;
+  if (ref > 0 && projected > ref * 1.1) {
+    alerts.push({type:'warn', icon:'📈', title:'Proyección excede presupuesto', text:`A este ritmo gastarás ${fmtF(projected)} USD vs ${fmtF(ref)} USD disponibles.`});
   }
 
   // Positive
-  if (total > 0 && tb > 0 && pct < 50 && dLeft < 10) {
-    alerts.push({type:'ok', icon:'🎉', title:'¡Excelente control!', text:`Llevas solo ${Math.round(pct)}% del presupuesto con ${dLeft} días restantes. Vas muy bien.`});
+  if (total > 0 && income > 0 && total/income < 0.5 && dLeft < 10) {
+    alerts.push({type:'ok', icon:'🎉', title:'¡Excelente control!', text:`Solo gastaste ${Math.round(total/income*100)}% de tu ingreso con ${dLeft} días restantes. Vas muy bien.`});
   }
 
   if (alerts.length === 0) return '';
-
-  const html = alerts.map(a => `
-    <div class="alert ${a.type}">
-      <div class="alert-icon">${a.icon}</div>
-      <div class="alert-text">
-        <div class="alert-title">${a.title}</div>
-        <div>${a.text}</div>
-      </div>
-    </div>`).join('');
-
-  return `<div class="card"><div class="card-title">🔔 Alertas</div>${html}</div>`;
+  return `<div class="card"><div class="card-title">🔔 Alertas</div>${alerts.map(a=>`<div class="alert ${a.type}"><div class="alert-icon">${a.icon}</div><div class="alert-text"><div class="alert-title">${a.title}</div><div>${a.text}</div></div></div>`).join('')}</div>`;
 }
 
 // ══════════════════════════════════════════
@@ -903,7 +942,7 @@ function renderLista() {
           <div class="ei-meta">${cat.label}${e.note?' · '+esc(e.note):''}</div>
         </div>
         <div class="ei-right">
-          <div class="ei-amt" style="color:${cat.color}">${fmtF(e.amount)}</div>
+          <div class="ei-amt" style="color:${cat.color}">${fmtF(toUSD(e.amount,e.currency||'usd'))}${e.currency==='pen'?` <span style="font-size:9px;color:var(--muted)">(S/${e.amount.toFixed(2)})</span>`:''}</div>
           <span class="ei-tag ${e.type||'variable'}">${e.type==='fixed'?'Fijo':'Var'}</span>
           <button class="ei-del" onclick="deleteExpense(${e.id})">✕</button>
         </div>
@@ -911,7 +950,7 @@ function renderLista() {
     });
   });
 
-  const total = filtered.reduce((s,e)=>s+e.amount,0);
+  const total = filtered.reduce((s,e)=>s+toUSD(e.amount,e.currency||'usd'),0);
   html += `<div class="list-total"><div class="lt-label">Total ${activeFilter!=='all'?C(activeFilter).label:'del mes'}</div><div class="lt-val">${fmtF(total)}</div></div>`;
   $('expList').innerHTML = html;
 }
@@ -929,7 +968,7 @@ function renderStats() {
     while(m<0){m+=12;y--;}
     while(m>11){m-=12;y++;}
     const key = mk(y,m);
-    const t = S.expenses.filter(e=>e.date.startsWith(key)).reduce((s,e)=>s+e.amount,0);
+    const t = S.expenses.filter(e=>e.date.startsWith(key)).reduce((s,e)=>s+toUSD(e.amount,e.currency||'usd'),0);
     return {label:MONTHS_S[m], total:t, isCur:i===5};
   });
   const maxBar = Math.max(...bars.map(b=>b.total),1);
@@ -945,7 +984,7 @@ function renderStats() {
   // Category breakdown
   const byCat = CATS.map(c => ({
     ...c,
-    total: me.filter(e=>e.category===c.id).reduce((s,e)=>s+e.amount,0),
+    total: me.filter(e=>e.category===c.id).reduce((s,e)=>s+toUSD(e.amount,e.currency||'usd'),0),
     count: me.filter(e=>e.category===c.id).length,
   })).filter(c=>c.count>0).sort((a,b)=>b.total-a.total);
 
@@ -974,7 +1013,7 @@ function renderStats() {
   const prevKey = mk(prevY,prevM);
   const prevMe = S.expenses.filter(e=>e.date.startsWith(prevKey));
   const momItems = byCat.filter(c=>c.total>0).map(c => {
-    const prev = prevMe.filter(e=>e.category===c.id).reduce((s,e)=>s+e.amount,0);
+    const prev = prevMe.filter(e=>e.category===c.id).reduce((s,e)=>s+toUSD(e.amount,e.currency||'usd'),0);
     const diff = c.total - prev;
     const pctDiff = prev>0 ? ((diff/prev)*100) : null;
     const trendClass = diff>0 ? 'trend-up' : diff<0 ? 'trend-down' : 'trend-same';
@@ -1017,7 +1056,7 @@ function renderConfig() {
       </div>
       <input class="br-input" type="number" placeholder="0" value="${val}" inputmode="numeric"
         oninput="setBudget('${c.id}',this.value)"
-        onchange="this.closest('.budget-row').querySelector('.br-current').textContent=this.value>0?new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',minimumFractionDigits:0}).format(this.value)+'/mes':'Sin límite'">
+        onchange="this.closest('.budget-row').querySelector('.br-current').textContent=this.value>0?'$'+parseFloat(this.value).toFixed(2)+' USD/mes':'Sin límite'">
     </div>`;
   }).join('');
 
@@ -1048,10 +1087,32 @@ function renderConfig() {
 
   $('configWrap').innerHTML = `
     <div class="config-section" style="margin-top:14px">
-      <div class="cs-header">🎯 Presupuestos por categoría</div>
+      <div class="cs-header">💵 Finanzas personales</div>
+      <div class="cs-desc">Define tu ingreso y metas para que el dashboard te muestre cuánto te queda disponible.</div>
+      <div class="budget-row">
+        <div class="br-icon">💵</div>
+        <div class="br-info"><div class="br-name">Ingreso mensual (USD)</div><div class="br-current">${S.monthlyIncome?fmtF(S.monthlyIncome)+'/mes':'No definido'}</div></div>
+        <input class="br-input" type="number" placeholder="2800" value="${S.monthlyIncome||''}" inputmode="numeric"
+          onchange="S.monthlyIncome=parseFloat(this.value)||0;saveState();renderDashboard()">
+      </div>
+      <div class="budget-row">
+        <div class="br-icon">🎯</div>
+        <div class="br-info"><div class="br-name">Meta de ahorro (USD/mes)</div><div class="br-current">${S.savingsGoal?fmtF(S.savingsGoal)+'/mes':'No definida'}</div></div>
+        <input class="br-input" type="number" placeholder="0" value="${S.savingsGoal||''}" inputmode="numeric"
+          onchange="S.savingsGoal=parseFloat(this.value)||0;saveState();renderDashboard()">
+      </div>
+      <div class="budget-row">
+        <div class="br-icon">🇵🇪</div>
+        <div class="br-info"><div class="br-name">Tipo de cambio PEN→USD</div><div class="br-current">1 USD = ${S.exchangeRate||3.7} soles</div></div>
+        <input class="br-input" type="number" placeholder="3.70" step="0.01" value="${S.exchangeRate||3.7}" inputmode="decimal"
+          onchange="S.exchangeRate=parseFloat(this.value)||3.7;this.closest('.budget-row').querySelector('.br-current').textContent='1 USD = '+this.value+' soles';saveState()">
+      </div>
+    </div>
+
+    <div class="config-section">
+      <div class="cs-header">🎯 Presupuestos por categoría (USD)</div>
       <div class="cs-desc">Define límites mensuales para recibir alertas automáticas.</div>
       ${budgetRows}
-      ${sgRow}
     </div>
 
     <div class="config-section">
@@ -1095,17 +1156,17 @@ function openSheet(id=null) {
   $('fDate').value = new Date().toISOString().slice(0,10);
   $('fDesc').value = ''; $('fAmt').value = ''; $('fNote').value = '';
   $('ferr').classList.add('hidden');
-  selCat = 'comida'; selSubCat = ''; selType = 'variable';
+  selCat = 'comida'; selSubCat = ''; selType = 'variable'; selCurr = 'usd';
 
   if (id) {
     const e = S.expenses.find(x=>x.id===id);
     if (e) {
       $('fDesc').value=e.desc; $('fAmt').value=e.amount;
       $('fDate').value=e.date; $('fNote').value=e.note||'';
-      selCat=e.category; selSubCat=e.subCategory||''; selType=e.type||'variable';
+      selCat=e.category; selSubCat=e.subCategory||''; selType=e.type||'variable'; selCurr=e.currency||'usd';
     }
   }
-  renderCatGrid(); renderTypeRow();
+  renderCatGrid(); renderTypeRow(); renderCurrRow();
   $('overlay').classList.add('open');
   $('sheet').classList.add('open');
   sheetOpen=true;
@@ -1117,6 +1178,13 @@ function closeSheet() {
   sheetOpen=false; editId=null;
 }
 
+function renderCurrRow() {
+  if (!$('currRow')) return;
+  $('currRow').innerHTML = `
+    <div class="topt ${selCurr==='usd'?'sel-fixed':''}" onclick="pickCurr('usd')">🇺🇸 USD</div>
+    <div class="topt ${selCurr==='pen'?'sel-variable':''}" onclick="pickCurr('pen')">🇵🇪 PEN (Soles)</div>`;
+}
+function pickCurr(c) { selCurr=c; renderCurrRow(); }
 function renderCatGrid() {
   $('catGrid').innerHTML = CATS.map(c => `
     <div class="copt ${c.id===selCat?'sel':''}" onclick="pickCat('${c.id}')">
@@ -1159,7 +1227,7 @@ function saveExpense() {
   if (!amt||isNaN(amt)||amt<=0) { showFerr('Ingresa un monto válido'); return; }
   if (!date) { showFerr('Selecciona una fecha'); return; }
   $('ferr').classList.add('hidden');
-  const obj = { desc, amount:amt, category:selCat, subCategory:selSubCat, date, note, type:selType };
+  const obj = { desc, amount:amt, category:selCat, subCategory:selSubCat, date, note, type:selType, currency:selCurr };
   if (editId) {
     const i = S.expenses.findIndex(e=>e.id===editId);
     if (i!==-1) S.expenses[i]={...S.expenses[i],...obj};
@@ -1309,27 +1377,32 @@ async function callAI(chatHistory, isInsights=false) {
   if(prevM<0){prevM=11;prevY--;}
   const prevTotal=S.expenses.filter(e=>e.date.startsWith(mk(prevY,prevM))).reduce((s,e)=>s+e.amount,0);
 
-  const systemPrompt = `Eres el asistente financiero personal de Matías Ortiz, un profesional que trabaja en Belcorp (Planning & Merchandising).
+  const systemPrompt = `Eres el asistente financiero personal de Matías Ortiz, profesional en Belcorp (Planning & Merchandising) en Perú.
+
+PERFIL FINANCIERO:
+- Ingreso mensual: $${S.monthlyIncome||2800} USD
+- Meta de ahorro: ${S.savingsGoal?'$'+S.savingsGoal+' USD/mes':'No definida'}
+- Monedas: gasta en USD y Soles peruanos (PEN). Tipo de cambio: 1 USD = ${S.exchangeRate||3.7} PEN
+- Todos los totales están en USD
 
 DATOS DE ${MONTHS[viewM].toUpperCase()} ${viewY}:
-- Total gastado: ${fmtF(total)}
-- Presupuesto total: ${tb?fmtF(tb):'No definido'}
-- Meta de ahorro: ${S.savingsGoal?fmtF(S.savingsGoal):'No definida'}
+- Total gastado: ${fmtF(total)} USD
+- Disponible del ingreso: ${fmtF((S.monthlyIncome||0)-total)} USD
+- Presupuesto definido: ${tb?fmtF(tb)+' USD':'No definido'}
 - Días restantes del mes: ${daysLeftInMonth()}
-- Gasto proyectado al cierre: ${fmtF(total + (me.length>0?total/today.getDate()*daysLeftInMonth():0))}
+- Gasto proyectado: ${fmtF(total + (me.length>0?total/Math.max(today.getDate(),1)*daysLeftInMonth():0))} USD
 
-POR CATEGORÍA:
+POR CATEGORÍA (en USD):
 ${catBreakdown||'Sin gastos registrados'}
 
-MES ANTERIOR (${MONTHS_S[prevM]}): ${fmtF(prevTotal)}
-SUSCRIPCIONES: ${S.subscriptions.map(s=>s.name+' '+fmtF(s.amount)).join(', ')||'Ninguna'}
+MES ANTERIOR (${MONTHS_S[prevM]}): ${fmtF(prevTotal)} USD
+SUSCRIPCIONES: ${S.subscriptions.map(s=>s.name+' $'+s.amount).join(', ')||'Ninguna'}
 
 INSTRUCCIONES:
-- Responde siempre en español, de forma directa y personalizada para Matías
-- Sé conciso pero útil. Máximo 3-4 oraciones por respuesta
-- Da consejos específicos y accionables, con números concretos
-- Usa emojis con moderación para hacer la respuesta más legible
-- ${isInsights?'Da exactamente 3 insights numerados, cada uno en una línea separada, sin markdown adicional':'Responde la pregunta del usuario directamente'}`;
+- Responde siempre en español, directo y personalizado para Matías
+- Usa USD en tus respuestas (símbolo $)
+- Máximo 3-4 oraciones por respuesta, con números concretos
+- ${isInsights?'Da exactamente 3 insights numerados, cada uno en línea separada, sin markdown':'Responde la pregunta directamente'}`;
 
   const messages = isInsights
     ? [{ role:'user', content:`Analiza mis gastos de ${MONTHS[viewM]} y dame 3 insights específicos y accionables. Sé directo y usa números concretos.` }]
@@ -1389,10 +1462,12 @@ async function refreshInsights() {
 function exportCSV() {
   const me = getMonthExpenses();
   if (me.length===0){toast('Sin gastos para exportar');return;}
-  const rows=[['Fecha','Descripción','Categoría','Sub-categoría','Monto','Tipo','Nota']];
+  const rows=[['Fecha','Descripción','Categoría','Sub-categoría','Moneda','Monto original','Monto USD','Tipo','Nota']];
   me.forEach(e=>{
     const cat=C(e.category);
-    rows.push([e.date,e.desc,cat.label,e.subCategory||'',e.amount,e.type||'',e.note||'']);
+    const curr=e.currency||'usd';
+    const usd=toUSD(e.amount,curr);
+    rows.push([e.date,e.desc,cat.label,e.subCategory||'',curr.toUpperCase(),e.amount,usd.toFixed(2),e.type||'',e.note||'']);
   });
   const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});
